@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Video Stitcher</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.5rem; }
+    .meta { color: #555; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    label { display: block; margin-bottom: 0.5rem; font-weight: 600; }
+    input[type="file"] { margin-bottom: 1rem; }
+    button { padding: 0.6rem 1.2rem; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status { margin-top: 1.5rem; padding: 1rem; background: #f4f4f4; border-radius: 6px; white-space: pre-wrap; }
+    a.download { display: inline-block; margin-top: 1rem; }
+    .error { color: #b00020; }
+    .success { color: #0a7a2f; }
+  </style>
+</head>
+<body>
+  <h1>Video Stitcher</h1>
+  <p class="meta">
+    Upload up to {{ max_videos }} videos (max {{ max_file_mb }}MB each, {{ max_total_mb }}MB total).
+    The service stitches random clips into one output video (10s–2min).
+  </p>
+
+  <form id="upload-form">
+    <label for="videos">Select videos (mp4, mov, webm, avi, mkv)</label>
+    <input id="videos" name="files" type="file" accept="video/*" multiple required />
+    <button type="submit" id="submit-btn">Upload &amp; Generate</button>
+  </form>
+
+  <div id="status"></div>
+
+  <script>
+    const form = document.getElementById('upload-form');
+    const statusEl = document.getElementById('status');
+    const submitBtn = document.getElementById('submit-btn');
+    let pollTimer = null;
+
+    function setStatus(html, className = '') {
+      statusEl.className = className;
+      statusEl.innerHTML = html;
+    }
+
+    async function pollJob(jobId) {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      if (!res.ok) throw new Error('Failed to fetch job status');
+      const data = await res.json();
+
+      setStatus(
+        `Job: ${data.job_id}\nStatus: ${data.status}\nProgress: ${data.progress}%\n` +
+        (data.output_duration_sec ? `Output duration: ${data.output_duration_sec}s\n` : '') +
+        (data.clip_count ? `Clips used: ${data.clip_count}\n` : '') +
+        (data.error_message ? `Error: ${data.error_message}` : ''),
+        data.status === 'failed' ? 'error' : ''
+      );
+
+      if (data.status === 'completed' && data.download_url) {
+        clearInterval(pollTimer);
+        submitBtn.disabled = false;
+        statusEl.innerHTML += `\n<a class="download success" href="${data.download_url}">Download stitched video</a>`;
+        return;
+      }
+
+      if (data.status === 'failed') {
+        clearInterval(pollTimer);
+        submitBtn.disabled = false;
+      }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const files = document.getElementById('videos').files;
+      if (!files.length) return;
+
+      submitBtn.disabled = true;
+      setStatus('Uploading...');
+
+      const formData = new FormData();
+      for (const file of files) formData.append('files', file);
+
+      try {
+        const res = await fetch('/api/jobs', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Upload failed');
+
+        setStatus(`Job created: ${data.job_id}\nProcessing...`);
+        pollTimer = setInterval(() => pollJob(data.job_id), 2000);
+        await pollJob(data.job_id);
+      } catch (err) {
+        setStatus(`Error: ${err.message}`, 'error');
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+{
+  "info": {
+    "name": "Video Stitcher API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/health"
+      }
+    },
+    {
+      "name": "Create Job",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/api/jobs",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "files",
+              "type": "file",
+              "src": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Job Status",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/jobs/{{job_id}}"
+      }
+    },
+    {
+      "name": "Download Output",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/jobs/{{job_id}}/download"
+      }
+    },
+    {
+      "name": "Delete Job",
+      "request": {
+        "method": "DELETE",
+        "url": "{{base_url}}/api/jobs/{{job_id}}"
+      }
+    }
+  ],
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000" },
+    { "key": "job_id", "value": "" }
+  ]
+}

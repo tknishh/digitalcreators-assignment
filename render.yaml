@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: video-stitcher-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DEBUG
+        value: "false"
+    disk:
+      name: video-data
+      mountPath: /app/data
+      sizeGB: 1
