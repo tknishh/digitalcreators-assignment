@@ -18,12 +18,22 @@ def validate_extension(filename: str) -> str:
     return ext
 
 
-def validate_content_type(content_type: str | None) -> None:
-    if content_type and content_type not in settings.allowed_mime_types:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported content type: {content_type}",
-        )
+def validate_content_type(content_type: str | None, extension: str | None = None) -> None:
+    if not content_type:
+        return
+
+    base_type = content_type.split(";")[0].strip().lower()
+    if base_type in settings.allowed_mime_types:
+        return
+
+    # Browsers/OSes report inconsistent video MIME types; trust validated extensions.
+    if base_type.startswith("video/") and extension in settings.allowed_extensions:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Unsupported content type: {content_type}",
+    )
 
 
 async def validate_upload_batch(files: list[UploadFile]) -> None:
@@ -46,8 +56,8 @@ async def validate_upload_batch(files: list[UploadFile]) -> None:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Each upload must include a filename.",
             )
-        validate_extension(upload.filename)
-        validate_content_type(upload.content_type)
+        ext = validate_extension(upload.filename)
+        validate_content_type(upload.content_type, extension=ext)
 
         content = await upload.read()
         size = len(content)

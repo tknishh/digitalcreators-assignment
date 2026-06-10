@@ -24,6 +24,7 @@ class Settings(BaseSettings):
         "video/mp4",
         "video/quicktime",
         "video/webm",
+        "video/avi",
         "video/x-msvideo",
         "video/x-matroska",
         "application/octet-stream",
@@ -35,6 +36,10 @@ class Settings(BaseSettings):
     default_target_duration_sec: float = 60.0
     clip_duration_sec: float = 4.0
     min_clip_duration_sec: float = 2.0
+    output_width: int = 1280
+    output_height: int = 720
+    output_fps: int = 30
+    output_audio_rate: int = 44100
 
     # Job lifecycle
     job_ttl_hours: int = 24

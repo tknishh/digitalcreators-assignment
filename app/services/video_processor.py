@@ -12,6 +12,15 @@ from app.services import storage
 
 logger = logging.getLogger(__name__)
 
+# Normalized output spec — all clips must match for reliable concat
+_OUTPUT_SCALE = (
+    f"scale={settings.output_width}:{settings.output_height}:"
+    "force_original_aspect_ratio=decrease,"
+    f"pad={settings.output_width}:{settings.output_height}:"
+    "(ow-iw)/2:(oh-ih)/2,"
+    f"fps={settings.output_fps},format=yuv420p,setsar=1"
+)
+
 
 class VideoProcessingError(Exception):
     pass
@@ -35,6 +44,27 @@ def check_ffmpeg_available() -> bool:
         return True
     except (VideoProcessingError, FileNotFoundError):
         return False
+
+
+def probe_has_audio(video_path: Path) -> bool:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+            str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and "audio" in result.stdout
 
 
 def probe_duration(video_path: Path) -> float:
@@ -69,7 +99,6 @@ def compute_target_duration(videos: list[UploadedVideo]) -> float:
     if total_source <= settings.min_output_duration_sec:
         return settings.min_output_duration_sec
 
-    # Use 40% of total source, clamped to allowed range
     target = total_source * 0.4
     target = max(settings.min_output_duration_sec, min(settings.max_output_duration_sec, target))
     return round(target, 1)
@@ -114,7 +143,6 @@ def select_clips(
     if not selected:
         raise VideoProcessingError("Could not select any valid clips from uploaded videos")
 
-    # Trim clips if we overshoot target duration
     total = sum(c[2] for c in selected)
     while total > target_duration_sec and selected:
         last_path, last_start, last_dur = selected.pop()
@@ -124,7 +152,6 @@ def select_clips(
             selected.append((last_path, last_start, new_dur))
         total = sum(c[2] for c in selected)
 
-    # Pad with extra short clips if we're under minimum
     total = sum(c[2] for c in selected)
     idx = 0
     while total < settings.min_output_duration_sec and idx < max_attempts:
@@ -143,59 +170,98 @@ def select_clips(
 
 
 def extract_clip(source: Path, start: float, duration: float, output: Path) -> None:
-    _run_command(
-        [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            str(start),
-            "-i",
-            str(source),
-            "-t",
-            str(duration),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-movflags",
-            "+faststart",
-            "-avoid_negative_ts",
-            "make_zero",
-            str(output),
-        ]
-    )
+    """
+    Extract and normalize a clip to a consistent format (resolution, fps, audio).
+
+    All clips share the same encoding params so concat plays without frozen frames.
+    """
+    has_audio = probe_has_audio(source)
+    encode_args = [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        str(settings.output_audio_rate),
+        "-ac",
+        "2",
+        "-vsync",
+        "cfr",
+        "-r",
+        str(settings.output_fps),
+        "-movflags",
+        "+faststart",
+        "-avoid_negative_ts",
+        "make_zero",
+        "-fflags",
+        "+genpts",
+    ]
+
+    if has_audio:
+        _run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source),
+                "-ss",
+                str(start),
+                "-t",
+                str(duration),
+                "-vf",
+                _OUTPUT_SCALE,
+                "-af",
+                f"aresample={settings.output_audio_rate},aformat=channel_layouts=stereo",
+                *encode_args,
+                str(output),
+            ]
+        )
+    else:
+        # AVI and some webm files have no audio — inject silent track
+        _run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source),
+                "-ss",
+                str(start),
+                "-t",
+                str(duration),
+                "-f",
+                "lavfi",
+                "-i",
+                f"anullsrc=channel_layout=stereo:sample_rate={settings.output_audio_rate}",
+                "-vf",
+                _OUTPUT_SCALE,
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-shortest",
+                *encode_args,
+                str(output),
+            ]
+        )
 
 
 def concat_clips(clip_paths: list[Path], output: Path) -> None:
+    """
+    Concatenate normalized clips. Always re-encode with genpts — never stream-copy,
+    which causes frozen frames at clip boundaries when timestamps drift.
+    """
     concat_file = output.parent / "concat_list.txt"
     concat_file.write_text(
         "\n".join(f"file '{path.resolve()}'" for path in clip_paths),
         encoding="utf-8",
     )
     try:
-        _run_command(
-            [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_file),
-                "-c",
-                "copy",
-                str(output),
-            ]
-        )
-    except VideoProcessingError:
-        # Re-encode if stream copy fails (mixed codecs/resolutions)
         _run_command(
             [
                 "ffmpeg",
@@ -216,6 +282,16 @@ def concat_clips(clip_paths: list[Path], output: Path) -> None:
                 "aac",
                 "-b:a",
                 "128k",
+                "-ar",
+                str(settings.output_audio_rate),
+                "-ac",
+                "2",
+                "-vsync",
+                "cfr",
+                "-r",
+                str(settings.output_fps),
+                "-fflags",
+                "+genpts",
                 "-movflags",
                 "+faststart",
                 str(output),
@@ -239,8 +315,18 @@ def enforce_duration_bounds(output: Path, target_max: float) -> float:
             str(output),
             "-t",
             str(settings.max_output_duration_sec),
-            "-c",
-            "copy",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
             str(trimmed),
         ]
     )

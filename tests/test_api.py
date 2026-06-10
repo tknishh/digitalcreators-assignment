@@ -35,6 +35,15 @@ def test_create_job_rejects_empty_upload(client):
     assert response.status_code == 422
 
 
+def test_create_job_accepts_video_avi_mime(client):
+    with patch("app.routes.jobs._run_generation"):
+        response = client.post(
+            "/api/jobs",
+            files=[("files", ("clip.avi", io.BytesIO(b"fake avi bytes"), "video/avi"))],
+        )
+    assert response.status_code == 202
+
+
 def test_create_job_rejects_unsupported_extension(client):
     response = client.post(
         "/api/jobs",
