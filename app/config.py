@@ -1,6 +1,15 @@
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _default_low_memory_mode() -> bool:
+    return os.getenv("RENDER") == "true" or os.getenv("LOW_MEMORY_MODE", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 class Settings(BaseSettings):
@@ -8,6 +17,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Video Stitcher API"
     debug: bool = False
+    low_memory_mode: bool = _default_low_memory_mode()
 
     # Storage
     data_dir: Path = Path("data")
@@ -40,6 +50,8 @@ class Settings(BaseSettings):
     output_height: int = 720
     output_fps: int = 30
     output_audio_rate: int = 44100
+    ffmpeg_preset: str = "fast"
+    ffmpeg_threads: int = 0  # 0 = ffmpeg default
 
     # Job lifecycle
     job_ttl_hours: int = 24
@@ -52,6 +64,14 @@ class Settings(BaseSettings):
     @property
     def max_total_size_bytes(self) -> int:
         return self.max_total_size_mb * 1024 * 1024
+
+    def model_post_init(self, __context: object) -> None:
+        if self.low_memory_mode:
+            self.output_width = 640
+            self.output_height = 360
+            self.output_fps = 24
+            self.ffmpeg_preset = "ultrafast"
+            self.ffmpeg_threads = 1
 
 
 settings = Settings()

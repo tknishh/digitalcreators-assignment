@@ -1,7 +1,9 @@
 import asyncio
+import gc
 import json
 import logging
 import random
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable, Optional
@@ -12,18 +14,50 @@ from app.services import storage
 
 logger = logging.getLogger(__name__)
 
-# Normalized output spec — all clips must match for reliable concat
-_OUTPUT_SCALE = (
-    f"scale={settings.output_width}:{settings.output_height}:"
-    "force_original_aspect_ratio=decrease,"
-    f"pad={settings.output_width}:{settings.output_height}:"
-    "(ow-iw)/2:(oh-ih)/2,"
-    f"fps={settings.output_fps},format=yuv420p,setsar=1"
-)
-
 
 class VideoProcessingError(Exception):
     pass
+
+
+def _output_scale_filter() -> str:
+    w, h, fps = settings.output_width, settings.output_height, settings.output_fps
+    return (
+        f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
+        f"fps={fps},format=yuv420p,setsar=1"
+    )
+
+
+def _encode_args(*, with_faststart: bool = True) -> list[str]:
+    args = [
+        "-c:v",
+        "libx264",
+        "-preset",
+        settings.ffmpeg_preset,
+        "-crf",
+        "28" if settings.low_memory_mode else "23",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k" if settings.low_memory_mode else "128k",
+        "-ar",
+        str(settings.output_audio_rate),
+        "-ac",
+        "2",
+        "-vsync",
+        "cfr",
+        "-r",
+        str(settings.output_fps),
+        "-avoid_negative_ts",
+        "make_zero",
+        "-fflags",
+        "+genpts",
+    ]
+    if settings.ffmpeg_threads > 0:
+        args.extend(["-threads", str(settings.ffmpeg_threads)])
+    if with_faststart:
+        args.extend(["-movflags", "+faststart"])
+    return args
 
 
 def _run_command(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -170,38 +204,10 @@ def select_clips(
 
 
 def extract_clip(source: Path, start: float, duration: float, output: Path) -> None:
-    """
-    Extract and normalize a clip to a consistent format (resolution, fps, audio).
-
-    All clips share the same encoding params so concat plays without frozen frames.
-    """
+    """Extract and normalize a clip to a consistent format (resolution, fps, audio)."""
     has_audio = probe_has_audio(source)
-    encode_args = [
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "23",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-ar",
-        str(settings.output_audio_rate),
-        "-ac",
-        "2",
-        "-vsync",
-        "cfr",
-        "-r",
-        str(settings.output_fps),
-        "-movflags",
-        "+faststart",
-        "-avoid_negative_ts",
-        "make_zero",
-        "-fflags",
-        "+genpts",
-    ]
+    encode_args = _encode_args()
+    scale = _output_scale_filter()
 
     if has_audio:
         _run_command(
@@ -215,7 +221,7 @@ def extract_clip(source: Path, start: float, duration: float, output: Path) -> N
                 "-t",
                 str(duration),
                 "-vf",
-                _OUTPUT_SCALE,
+                scale,
                 "-af",
                 f"aresample={settings.output_audio_rate},aformat=channel_layouts=stereo",
                 *encode_args,
@@ -223,7 +229,6 @@ def extract_clip(source: Path, start: float, duration: float, output: Path) -> N
             ]
         )
     else:
-        # AVI and some webm files have no audio — inject silent track
         _run_command(
             [
                 "ffmpeg",
@@ -239,7 +244,7 @@ def extract_clip(source: Path, start: float, duration: float, output: Path) -> N
                 "-i",
                 f"anullsrc=channel_layout=stereo:sample_rate={settings.output_audio_rate}",
                 "-vf",
-                _OUTPUT_SCALE,
+                scale,
                 "-map",
                 "0:v:0",
                 "-map",
@@ -249,13 +254,10 @@ def extract_clip(source: Path, start: float, duration: float, output: Path) -> N
                 str(output),
             ]
         )
+    gc.collect()
 
 
-def concat_clips(clip_paths: list[Path], output: Path) -> None:
-    """
-    Concatenate normalized clips. Always re-encode with genpts — never stream-copy,
-    which causes frozen frames at clip boundaries when timestamps drift.
-    """
+def _concat_from_list(clip_paths: list[Path], output: Path) -> None:
     concat_file = output.parent / "concat_list.txt"
     concat_file.write_text(
         "\n".join(f"file '{path.resolve()}'" for path in clip_paths),
@@ -272,33 +274,40 @@ def concat_clips(clip_paths: list[Path], output: Path) -> None:
                 "0",
                 "-i",
                 str(concat_file),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "23",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
-                "-ar",
-                str(settings.output_audio_rate),
-                "-ac",
-                "2",
-                "-vsync",
-                "cfr",
-                "-r",
-                str(settings.output_fps),
-                "-fflags",
-                "+genpts",
-                "-movflags",
-                "+faststart",
+                *_encode_args(),
                 str(output),
             ]
         )
     finally:
         concat_file.unlink(missing_ok=True)
+    gc.collect()
+
+
+def concat_two(path_a: Path, path_b: Path, output: Path) -> None:
+    """Merge two normalized clips — keeps peak memory low on small instances."""
+    _concat_from_list([path_a, path_b], output)
+
+
+def concat_clips(clip_paths: list[Path], output: Path) -> None:
+    """Concatenate clips incrementally (pairwise) to limit memory on Render free tier."""
+    if not clip_paths:
+        raise VideoProcessingError("No clips to concatenate")
+    if len(clip_paths) == 1:
+        shutil.copy2(clip_paths[0], output)
+        return
+
+    temp_dir = output.parent
+    working = clip_paths[0]
+    for index, next_clip in enumerate(clip_paths[1:], start=1):
+        merged = temp_dir / f"merge_{index:03d}.mp4"
+        concat_two(working, next_clip, merged)
+        if working != clip_paths[0]:
+            working.unlink(missing_ok=True)
+        next_clip.unlink(missing_ok=True)
+        working = merged
+
+    shutil.move(str(working), str(output))
+    gc.collect()
 
 
 def enforce_duration_bounds(output: Path, target_max: float) -> float:
@@ -315,22 +324,12 @@ def enforce_duration_bounds(output: Path, target_max: float) -> float:
             str(output),
             "-t",
             str(settings.max_output_duration_sec),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-movflags",
-            "+faststart",
+            *_encode_args(),
             str(trimmed),
         ]
     )
     trimmed.replace(output)
+    gc.collect()
     return probe_duration(output)
 
 

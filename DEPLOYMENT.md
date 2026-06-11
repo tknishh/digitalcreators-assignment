@@ -71,5 +71,7 @@ Add the live URL to:
 ## Notes
 
 - **Free tier cold starts:** First request after idle may take 30–60s. Mention this in your submission email.
+- **Free tier memory (512MB):** Video encoding is RAM-heavy. The app auto-enables `LOW_MEMORY_MODE` on Render (`RENDER=true`), which uses 640×360 output, single-threaded FFmpeg, and incremental concat. If jobs still OOM, upgrade to **Starter** (512MB+ shared CPU but more stable) or reduce upload size.
 - **Disk limits:** 1 GB is enough for the assessment; jobs auto-expire after 24 hours.
 - **FFmpeg:** Included in Docker image — no extra setup needed.
+- **Redeploy after fixes:** Push to GitHub — Render auto-redeploys.

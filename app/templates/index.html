@@ -378,6 +378,11 @@
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
     footer {
       text-align: center;
       margin-top: 2rem;
@@ -528,6 +533,18 @@
 
     async function pollJob(jobId) {
       const res = await fetch(`/api/jobs/${jobId}`);
+      if (res.status === 502 || res.status === 503) {
+        statusCard.innerHTML = `
+          <div class="status-header">
+            <span class="status-badge processing">processing</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-label"><span>Server busy — retrying…</span></div>
+            <div class="progress-bar"><div class="progress-fill" style="width:40%;animation:pulse 1.5s ease infinite"></div></div>
+          </div>`;
+        statusPanel.classList.add('visible');
+        return;
+      }
       if (!res.ok) throw new Error('Failed to fetch job status');
       const data = await res.json();
       renderStatus(data);

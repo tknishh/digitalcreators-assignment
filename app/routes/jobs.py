@@ -17,6 +17,9 @@ from app.validation import validate_upload_batch
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 logger = logging.getLogger(__name__)
 
+# Only one FFmpeg job at a time — prevents OOM on 512MB instances
+_processing_lock = asyncio.Lock()
+
 
 async def _save_uploads(job_id: str, files: list[UploadFile]) -> list[UploadedVideo]:
     upload_dir = job_upload_dir(job_id)
@@ -55,7 +58,8 @@ async def _run_generation(job_id: str) -> None:
         job.progress = value
 
     try:
-        await process_job(job, on_progress=update_progress)
+        async with _processing_lock:
+            await process_job(job, on_progress=update_progress)
         await job_store.update(job)
     except VideoProcessingError as exc:
         job.status = JobStatus.FAILED
