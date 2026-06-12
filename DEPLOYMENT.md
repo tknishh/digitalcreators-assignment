@@ -48,7 +48,7 @@ curl https://YOUR-SERVICE.onrender.com/health
 
 Expected:
 ```json
-{"status":"ok","ffmpeg_available":true,"version":"1.0.0"}
+{"status":"ok","ffmpeg_available":true,"storage_backend":"firebase","version":"2.0.0"}
 ```
 
 ### 6. Update submission docs
@@ -71,7 +71,8 @@ Add the live URL to:
 ## Notes
 
 - **Free tier cold starts:** First request after idle may take 30–60s. Mention this in your submission email.
-- **Free tier memory (512MB):** Video encoding is RAM-heavy. The app auto-enables `LOW_MEMORY_MODE` on Render (`RENDER=true`), which uses 640×360 output, single-threaded FFmpeg, and incremental concat. If jobs still OOM, upgrade to **Starter** (512MB+ shared CPU but more stable) or reduce upload size.
-- **Disk limits:** 1 GB is enough for the assessment; jobs auto-expire after 24 hours.
+- **Memory:** Video + CLIP processing needs 2GB+ RAM. Use a VM (Oracle Cloud free tier) or Render Starter; free tier is not recommended.
+- **Disk limits:** 1 GB is enough for the assessment; jobs auto-expire after `JOB_TTL_HOURS` (default 72h).
+- **Quality:** Use `fast` quality in production on memory-constrained tiers; `high` needs more RAM and CPU.
 - **FFmpeg:** Included in Docker image — no extra setup needed.
 - **Redeploy after fixes:** Push to GitHub — Render auto-redeploys.

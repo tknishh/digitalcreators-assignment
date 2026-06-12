@@ -5,6 +5,8 @@ __pycache__/
 venv/
 .env
 data/
+firebase-service-account.json
+*.db
 .pytest_cache/
 .coverage
 htmlcov/

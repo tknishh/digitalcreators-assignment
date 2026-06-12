@@ -3,7 +3,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from app.models import JobStatus
+from app.models import JobStatus, Orientation, QualityProfile
 
 
 class JobCreateResponse(BaseModel):
@@ -11,17 +11,23 @@ class JobCreateResponse(BaseModel):
     status: JobStatus
     message: str
     video_count: int
-    target_duration_sec: float
+    duration_sec: float
+    orientation: Orientation
+    quality_profile: QualityProfile
 
 
 class JobStatusResponse(BaseModel):
     job_id: str
     status: JobStatus
+    checkpoint: str
     progress: int = Field(ge=0, le=100)
     created_at: datetime
     updated_at: datetime
     video_count: int
-    target_duration_sec: float
+    duration_sec: float
+    orientation: Orientation
+    quality_profile: QualityProfile
+    prompt: Optional[str] = None
     output_duration_sec: Optional[float] = None
     clip_count: Optional[int] = None
     error_message: Optional[str] = None
@@ -31,4 +37,5 @@ class JobStatusResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     ffmpeg_available: bool
-    version: str = "1.0.0"
+    storage_backend: str
+    version: str = "2.0.0"

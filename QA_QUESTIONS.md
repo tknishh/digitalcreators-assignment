@@ -16,13 +16,13 @@ Prepared questions for the call with Ankit. Grouped by theme.
 
 ## Product & behavior
 
-4. **Clip selection intent** — Should the stitched video feel like a random highlight reel, or should clips be sequential/chronological from each source? I implemented round-robin + random start points — is that aligned with what you had in mind?
+4. **Clip selection intent** — Implemented prompt-driven CLIP scoring with interleaved sources for pacing. Without a prompt, round-robin variety. Is this aligned with “regenerate from given footage based on prompt”?
 
-5. **Target duration** — I compute duration as 40% of total source length (clamped 10s–2min). Would you prefer a fixed duration (e.g. always 60s) or a user-supplied target via API parameter?
+5. **Target duration** — User selects duration via UI/API (10–120s, default 15s). Confirmed this matches the updated brief.
 
 6. **Minimum source requirements** — If a user uploads one 3-second video, producing a 10s output requires repeating/padding clips. Is that acceptable, or should we reject jobs that can't naturally reach 10s?
 
-7. **Transitions** — Are hard cuts between clips fine, or would simple crossfades be a meaningful plus?
+7. **Transitions** — Implemented rotating crossfade transitions (`fade`, `smoothleft`, `dissolve`, `wipeleft`). Any preferred styles for social vs cinematic output?
 
 ---
 

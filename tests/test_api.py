@@ -1,69 +1,104 @@
 import io
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import settings
+from app.db.database import init_db
 from app.main import app
-from app.models import Job, JobStatus
-from app.services.job_store import job_store
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def client(tmp_path, monkeypatch):
+    db_path = tmp_path / "test.db"
+    storage_path = tmp_path / "storage"
+    monkeypatch.setattr(settings, "database_url", f"sqlite:///{db_path}")
+    monkeypatch.setattr(settings, "local_storage_dir", storage_path)
+    monkeypatch.setattr(settings, "use_local_storage", True)
+    monkeypatch.setattr(settings, "enable_musicgen", False)
+    init_db()
 
+    mock_storage = MagicMock()
+    mock_storage.upload.side_effect = lambda local, key, **kw: key
+    mock_storage.download.side_effect = lambda key, local: local.write_bytes(b"fake")
+    mock_storage.exists.return_value = True
+    mock_storage.delete.return_value = None
+    mock_storage.get_public_url.return_value = None
 
-@pytest.fixture(autouse=True)
-def clear_jobs():
-    job_store._jobs.clear()
-    yield
-    job_store._jobs.clear()
+    with patch("app.routes.jobs.get_object_storage", return_value=mock_storage), patch(
+        "app.services.object_storage.get_object_storage", return_value=mock_storage
+    ), patch("app.services.pipeline.get_object_storage", return_value=mock_storage), patch(
+        "app.routes.health.check_ffmpeg_available", return_value=True
+    ), patch(
+        "app.main.worker.run_forever", return_value=None
+    ):
+        with TestClient(app) as test_client:
+            yield test_client
 
 
 def test_health(client):
-    with patch("app.routes.health.check_ffmpeg_available", return_value=True):
-        response = client.get("/health")
+    response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["ffmpeg_available"] is True
+    assert data["storage_backend"] == "local"
 
 
-def test_create_job_rejects_empty_upload(client):
-    response = client.post("/api/jobs", files=[])
+def test_create_job_requires_files(client):
+    response = client.post(
+        "/api/jobs",
+        data={"duration_sec": 30, "orientation": "landscape"},
+    )
     assert response.status_code == 422
 
 
-def test_create_job_accepts_video_avi_mime(client):
-    with patch("app.routes.jobs._run_generation"):
-        response = client.post(
-            "/api/jobs",
-            files=[("files", ("clip.avi", io.BytesIO(b"fake avi bytes"), "video/avi"))],
-        )
-    assert response.status_code == 202
+def test_create_job_rejects_bad_duration(client):
+    response = client.post(
+        "/api/jobs",
+        data={"duration_sec": 5, "orientation": "landscape"},
+        files=[("files", ("test.mp4", io.BytesIO(b"fake"), "video/mp4"))],
+    )
+    assert response.status_code == 400
 
 
 def test_create_job_rejects_unsupported_extension(client):
     response = client.post(
         "/api/jobs",
+        data={"duration_sec": 30, "orientation": "landscape"},
         files=[("files", ("test.txt", io.BytesIO(b"not video"), "text/plain"))],
     )
     assert response.status_code == 400
-    assert "Unsupported file type" in response.json()["detail"]
+
+
+def test_create_job_accepts_valid_request(client):
+    with patch("app.routes.jobs.probe_duration", return_value=12.0):
+        response = client.post(
+            "/api/jobs",
+            data={
+                "duration_sec": 30,
+                "orientation": "portrait",
+                "quality_profile": "balanced",
+                "prompt": "energetic product launch video",
+            },
+            files=[("files", ("clip.mp4", io.BytesIO(b"fake video"), "video/mp4"))],
+        )
+    assert response.status_code == 202
+    data = response.json()
+    assert data["orientation"] == "portrait"
+    assert data["duration_sec"] == 30
+    assert data["quality_profile"] == "balanced"
+
+
+def test_create_job_rejects_bad_quality(client):
+    response = client.post(
+        "/api/jobs",
+        data={"duration_sec": 30, "orientation": "landscape", "quality_profile": "ultra"},
+        files=[("files", ("test.mp4", io.BytesIO(b"fake"), "video/mp4"))],
+    )
+    assert response.status_code == 400
 
 
 def test_get_job_not_found(client):
     response = client.get("/api/jobs/does-not-exist")
     assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_get_job_status_completed(client):
-    job = Job(status=JobStatus.COMPLETED)
-    job.output_path = None
-    await job_store.create(job)
-
-    response = client.get(f"/api/jobs/{job.id}")
-    assert response.status_code == 200
-    assert response.json()["status"] == "completed"

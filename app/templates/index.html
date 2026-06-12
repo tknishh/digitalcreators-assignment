@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Video Stitcher</title>
+  <title>Video Regenerator</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
@@ -389,6 +389,76 @@
       font-size: 0.8rem;
       color: var(--muted);
     }
+
+    .options {
+      display: grid;
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .field label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .field input[type="range"],
+    .field select,
+    .field textarea {
+      width: 100%;
+      font-family: inherit;
+      font-size: 0.95rem;
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.7rem 0.85rem;
+    }
+
+    .field textarea {
+      min-height: 72px;
+      resize: vertical;
+    }
+
+    .range-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .range-value {
+      font-weight: 600;
+      min-width: 3rem;
+      text-align: right;
+    }
+
+    .orientation-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .orientation-btn {
+      padding: 0.75rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--muted);
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 600;
+    }
+
+    .orientation-btn.active {
+      border-color: var(--accent);
+      color: var(--text);
+      background: rgba(91, 141, 239, 0.12);
+    }
   </style>
 </head>
 <body>
@@ -399,9 +469,9 @@
           <path d="M8 5v14l11-7z"/>
         </svg>
       </div>
-      <h1>Video Stitcher</h1>
+      <h1>Video Regenerator</h1>
       <p class="subtitle">
-        Upload multiple videos and get one highlight reel stitched from random clips.
+        Upload videos, set duration and orientation, optionally describe your goal — AI selects the best clips and builds a production-ready video.
       </p>
     </header>
 
@@ -410,10 +480,43 @@
         <span class="chip">Up to {{ max_videos }} videos</span>
         <span class="chip">{{ max_file_mb }}MB per file</span>
         <span class="chip">{{ max_total_mb }}MB total</span>
-        <span class="chip">10s – 2min output</span>
+        <span class="chip">{{ min_duration }}s – {{ max_duration }}s output</span>
       </div>
 
       <form id="upload-form">
+        <div class="options">
+          <div class="field">
+            <label for="duration">Target duration (seconds)</label>
+            <div class="range-row">
+              <input id="duration" name="duration_sec" type="range" min="{{ min_duration }}" max="{{ max_duration }}" value="{{ default_duration }}" />
+              <span class="range-value" id="duration-value">{{ default_duration }}s</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="quality">Video quality</label>
+            <select id="quality" name="quality_profile">
+              <option value="fast" selected>Fast — 720p, quick encode</option>
+              <option value="balanced">Balanced — 720p, sharper detail</option>
+              <option value="high">High — 1080p, best quality (slower)</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Output orientation</label>
+            <div class="orientation-row">
+              <button type="button" class="orientation-btn active" data-value="landscape">Landscape</button>
+              <button type="button" class="orientation-btn" data-value="portrait">Portrait</button>
+            </div>
+            <input type="hidden" id="orientation" name="orientation" value="landscape" />
+          </div>
+
+          <div class="field">
+            <label for="prompt">Prompt (optional)</label>
+            <textarea id="prompt" name="prompt" placeholder="e.g. energetic product launch reel for social media"></textarea>
+          </div>
+        </div>
+
         <input id="videos" class="file-input-hidden" name="files" type="file" accept="video/*" multiple required />
         <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Upload videos">
           <div class="dropzone-icon-wrap">
@@ -428,7 +531,7 @@
         <ul class="file-list" id="file-list"></ul>
 
         <button type="submit" class="btn" id="submit-btn" disabled>
-          Upload &amp; Generate
+          Upload &amp; Regenerate
         </button>
       </form>
     </div>
@@ -448,8 +551,26 @@
     const submitBtn = document.getElementById('submit-btn');
     const statusPanel = document.getElementById('status-panel');
     const statusCard = document.getElementById('status-card');
+    const durationInput = document.getElementById('duration');
+    const durationValue = document.getElementById('duration-value');
+    const orientationInput = document.getElementById('orientation');
+    const qualityInput = document.getElementById('quality');
+    const promptInput = document.getElementById('prompt');
+    const orientationButtons = document.querySelectorAll('.orientation-btn');
     let pollTimer = null;
     let uploadedCount = 0;
+
+    durationInput.addEventListener('input', () => {
+      durationValue.textContent = `${durationInput.value}s`;
+    });
+
+    orientationButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        orientationButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        orientationInput.value = btn.dataset.value;
+      });
+    });
 
     function formatSize(bytes) {
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
@@ -496,8 +617,11 @@
       const stats = [];
 
       if (uploadedCount) stats.push({ label: 'Videos uploaded', value: uploadedCount });
-      if (data.clip_count) stats.push({ label: 'Clips stitched', value: data.clip_count });
-      if (data.target_duration_sec) stats.push({ label: 'Target length', value: `${data.target_duration_sec}s` });
+      if (data.clip_count) stats.push({ label: 'Clips selected', value: data.clip_count });
+      if (data.duration_sec) stats.push({ label: 'Target length', value: `${data.duration_sec}s` });
+      if (data.orientation) stats.push({ label: 'Orientation', value: data.orientation });
+      if (data.quality_profile) stats.push({ label: 'Quality', value: data.quality_profile });
+      if (data.checkpoint) stats.push({ label: 'Checkpoint', value: data.checkpoint });
       if (data.output_duration_sec) stats.push({ label: 'Output length', value: `${data.output_duration_sec}s` });
 
       statusCard.innerHTML = `
@@ -525,7 +649,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            Download stitched video
+            Download final video
           </a>` : ''}`;
 
       statusPanel.classList.add('visible');
@@ -552,7 +676,7 @@
       if (data.status === 'completed' || data.status === 'failed') {
         clearInterval(pollTimer);
         submitBtn.disabled = fileInput.files.length === 0;
-        submitBtn.innerHTML = 'Upload &amp; Generate';
+        submitBtn.innerHTML = 'Upload &amp; Regenerate';
       }
     }
 
@@ -575,12 +699,16 @@
         </div>`;
 
       const formData = new FormData();
+      formData.append('duration_sec', durationInput.value);
+      formData.append('orientation', orientationInput.value);
+      formData.append('quality_profile', qualityInput.value);
+      if (promptInput.value.trim()) formData.append('prompt', promptInput.value.trim());
       for (const file of files) formData.append('files', file);
 
       try {
         const res = await fetch('/api/jobs', { method: 'POST', body: formData });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Upload failed');
+        if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Upload failed');
 
         submitBtn.innerHTML = '<span class="spinner"></span> Processing…';
         pollTimer = setInterval(() => pollJob(data.job_id), 2000);
@@ -588,7 +716,7 @@
       } catch (err) {
         statusCard.innerHTML = `<div class="error-msg">${err.message}</div>`;
         submitBtn.disabled = false;
-        submitBtn.innerHTML = 'Upload &amp; Generate';
+        submitBtn.innerHTML = 'Upload &amp; Regenerate';
       }
     });
   </script>

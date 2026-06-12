@@ -1,37 +1,49 @@
-# Walkthrough — Video Stitcher API
+# Walkthrough — Video Regenerator API
 
 ## Problem summary
 
-Build a backend that accepts up to 50 uploaded videos, asynchronously generates one stitched output video (10s–2min) from clips of those uploads, and lets the user download the result.
+Build a backend that accepts uploaded videos, asynchronously generates one cohesive output video (10s–2min) driven by an optional prompt, and lets the user download the result. Output should feel edited — not random hard cuts.
 
 ---
 
 ## Architecture
 
 ```
-Client (curl / minimal HTML)
+Client (HTML UI / curl)
         │
         ▼
 ┌───────────────────┐
 │   FastAPI (API)   │
-│  POST /api/jobs   │──► validate uploads, save to disk
+│  POST /api/jobs   │──► validate uploads → Firebase/local storage
 │  GET  /api/jobs/id│──► return status + progress
 │  GET  .../download│──► stream output mp4
 └─────────┬─────────┘
-          │ BackgroundTasks
+          │
           ▼
 ┌───────────────────┐
-│  Video processor  │──► ffprobe → select clips → ffmpeg extract → concat
+│  SQLite jobs DB   │──► checkpoints, clip metadata, resume state
 └─────────┬─────────┘
+          │
           ▼
-   data/uploads/  data/temp/  data/outputs/
+┌───────────────────┐
+│  Background worker│──► 1 job at a time
+└─────────┬─────────┘
+          │
+          ▼
+┌───────────────────────────────────────────────────┐
+│  Pipeline (checkpointed)                            │
+│  1. CLIP analyze keyframes (parallel)               │
+│  2. Select clips (prompt-driven or round-robin)    │
+│  3. Extract + normalize clips (parallel)            │
+│  4. Stitch with rotating crossfade transitions      │
+│  5. Generate audio (MusicGen or FFmpeg fallback)    │
+│  6. Mux + upload final                              │
+└───────────────────────────────────────────────────┘
 ```
 
-**Single-process async model:** uploads return immediately (`202 Accepted`) with a `job_id`. Processing runs in a FastAPI background task. FFmpeg calls run in `asyncio.to_thread()` so the event loop stays responsive for status polling.
+**Why async worker + checkpoints?** Video + CLIP processing can take minutes. Upload returns immediately (`202 Accepted`). SQLite checkpoints let jobs resume after container restarts without re-analyzing from scratch.
 
-**Why not block the request?** Video processing can take minutes with 50 files. Blocking would tie up connections, risk gateway timeouts on Render (~30s), and give no progress feedback.
-
-**Why not Celery/Redis yet?** For a single-instance assessment deploy, in-process background tasks are simpler and still demonstrate correct async API design. A queue would be the next step for horizontal scaling.
+**Why 1 job at a time?** Keeps memory predictable on constrained deploy targets (Render free tier, Docker locally with CLIP + optional MusicGen loaded).
 
 ---
 
@@ -39,16 +51,78 @@ Client (curl / minimal HTML)
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/` | GET | Minimal HTML test UI |
-| `/health` | GET | Liveness + FFmpeg availability |
+| `/` | GET | Web UI (upload, duration, quality, orientation, prompt) |
+| `/health` | GET | Liveness + FFmpeg + storage backend |
 | `/api/jobs` | POST | Upload videos, start job |
 | `/api/jobs/{id}` | GET | Poll status/progress |
 | `/api/jobs/{id}/download` | GET | Download completed video |
-| `/api/jobs/{id}` | DELETE | Remove job and files |
+| `/api/jobs/{id}` | DELETE | Remove job and storage objects |
 
 **Status lifecycle:** `pending` → `processing` → `completed` | `failed`
 
-**Progress:** 0–100 reported during processing (probe → clip selection → extract → concat → finalize).
+**Job parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `duration_sec` | Target output length (10–120s). UI default: **15s** |
+| `orientation` | `landscape` (1280×720) or `portrait` (720×1280) at fast/balanced; 1080p at high |
+| `quality_profile` | `fast` \| `balanced` \| `high` — per-job encode settings |
+| `prompt` | Optional — drives CLIP scoring, clip pacing, and audio mood |
+
+---
+
+## Clip selection (prompt-driven editing)
+
+### With prompt
+
+1. Extract keyframes every ~2s from each upload
+2. Score frames with Hugging Face CLIP against the prompt (+ cinematic variants)
+3. Rank candidates by score, **interleave across source videos** for pacing
+4. Avoid back-to-back clips from the same source when possible
+5. Plan clip count accounting for crossfade overlap
+
+### Without prompt
+
+Round-robin across videos with balanced variety (no CLIP bias toward one file).
+
+### Clip length
+
+Default **4 seconds** per clip. Selection trims or pads to hit the user's target duration (minimum 10s enforced).
+
+---
+
+## Transitions & visual cohesion
+
+- **Crossfade transitions** between clips via FFmpeg `xfade` + `acrossfade`
+- **Rotating styles** per boundary: `fade`, `smoothleft`, `dissolve`, `wipeleft` (configurable via `TRANSITION_STYLES`)
+- **Color normalization** during extract (`eq` filter) so mixed sources look more uniform
+- **No hard cuts** when transitions are enabled
+
+Transition overlap reduces effective output length; clip planning compensates.
+
+---
+
+## Quality profiles
+
+Each job stores `quality_profile`. The worker applies encode settings for that job only:
+
+| Profile | Resolution | CRF | Preset | Scale | Audio |
+|---------|------------|-----|--------|-------|-------|
+| fast | 720p | 23 | veryfast | default | 192k |
+| balanced | 720p | 20 | fast | Lanczos | 256k |
+| high | 1080p | 18 | medium | Lanczos+ | 320k |
+
+**Trade-offs:**
+
+| Improvement | Cost |
+|-------------|------|
+| Lower CRF (better quality) | Larger files, slower encode |
+| Slower preset | Better compression, much slower (× per pipeline stage) |
+| 1080p vs 720p | ~2× pixels, more RAM, slower |
+| Lanczos scaling | Sharper downscales, slightly slower |
+| More clips + transitions | More re-encode passes |
+
+The pipeline re-encodes at extract **and** at each transition merge, so `high` quality on a 60s job with 15 clips is significantly slower than `fast` on a 15s job with 4 clips.
 
 ---
 
@@ -56,72 +130,24 @@ Client (curl / minimal HTML)
 
 - **Count:** 1–50 files per job
 - **Extensions:** `.mp4`, `.mov`, `.webm`, `.avi`, `.mkv`
-- **MIME types:** checked when provided (browsers send `video/*`; `application/octet-stream` allowed for curl)
+- **MIME types:** `video/*` when provided; `application/octet-stream` allowed for curl
 - **Per-file max:** 100 MB
 - **Total max:** 500 MB per job
-- **Empty files:** rejected
 
-Files are saved under `data/uploads/{job_id}/` with indexed safe names.
-
----
-
-## Clip selection & stitching logic
-
-### Target duration (computed, not user-supplied)
-
-I compute target duration from source material:
-
-```
-target = clamp(total_source_duration × 0.4, 10s, 120s)
-```
-
-- If sources are very short (< 10s total), target = **10s** (minimum)
-- Otherwise use **40% of combined source length**, capped at **120s**
-- Rationale: more source material → longer highlight reel, but never outside the required bounds
-
-### Clip length
-
-Default **4 seconds** per clip (`CLIP_DURATION_SEC`), minimum **2 seconds** (`MIN_CLIP_DURATION_SEC`).
-
-### Selection algorithm (round-robin + random start)
-
-1. Probe each upload with `ffprobe` to get duration
-2. Calculate how many clips needed: `ceil(target / clip_duration)`
-3. **Round-robin** across videos so every upload contributes (when possible)
-4. For each clip, pick a **random start time** within the valid range `[0, duration - clip_len]`
-5. Skip videos shorter than 2s
-6. **Trim** last clips if total exceeds target
-7. **Pad** with extra clips if total falls below 10s minimum
-
-### Ordering
-
-Clips are ordered in round-robin sequence: video1 → video2 → … → videoN → video1 → …
-
-This gives variety rather than long contiguous blocks from one file.
-
-### Stitching
-
-1. Extract each clip with FFmpeg (`-ss`, `-t`, re-encode to H.264/AAC for consistency)
-2. Write a concat demuxer list file
-3. Try **stream copy** concat first (fast); fall back to **re-encode** if codecs/resolutions differ
-4. Final duration check; hard-trim if somehow over 120s
-
-### Duration guarantee
-
-| Constraint | Enforcement |
-|------------|-------------|
-| Min 10s | Pad with extra clips; fail job if still impossible |
-| Max 120s | Trim clips during selection; final FFmpeg trim as safety net |
-| Target | Computed dynamically per job |
+Files upload to Firebase Storage (or `data/storage/` local mirror).
 
 ---
 
-## Long-running work & errors
+## Persistence & resume
 
-- **Upload response:** immediate `202` with `job_id`
-- **Polling:** client polls `GET /api/jobs/{id}` every ~2s (UI does this automatically)
-- **Failures:** stored in `error_message` (e.g. corrupt video, FFmpeg error, duration too short)
-- **Download:** only when `status == completed`; otherwise `409 Conflict`
+| Data | Storage |
+|------|---------|
+| Job metadata, checkpoints | SQLite (`data/jobs.db`) |
+| Input videos, clip segments, outputs | Firebase / local object storage |
+
+Checkpoints: `uploaded → analyzed → clips_selected → clips_extracted → stitched → audio_added → completed`
+
+On restart, the worker picks up from the last checkpoint. Stale jobs whose input files are missing (e.g. from an old container) are auto-failed with a clear message.
 
 ---
 
@@ -129,11 +155,12 @@ This gives variety rather than long contiguous blocks from one file.
 
 | Concern | Approach |
 |---------|----------|
-| Large uploads | Streamed to disk in 1 MB chunks; validated before processing |
-| Temp files | Per-job `data/temp/{job_id}/` for clip segments |
-| Cleanup | `DELETE /api/jobs/{id}` removes all job files; background loop purges jobs older than 24h |
-| Disk on Render | 1 GB persistent volume at `/app/data` |
-| Memory | No full-file buffering; FFmpeg operates on disk paths |
+| Large uploads | Streamed to disk in 1 MB chunks |
+| Temp files | Per-job work dir under `data/temp/{job_id}/` |
+| Parallelism | Thread pools for CLIP keyframe analysis and clip extraction |
+| Memory | CLIP loaded once per analyze stage; MusicGen optional |
+| Cleanup | `DELETE /api/jobs/{id}`; TTL-based purge (`JOB_TTL_HOURS`) |
+| Deploy | Docker with persistent `data/` volume recommended |
 
 ---
 
@@ -141,31 +168,22 @@ This gives variety rather than long contiguous blocks from one file.
 
 | Decision | Trade-off |
 |----------|-----------|
-| In-memory job store | Fast, simple; lost on restart (acceptable for assessment; would use Redis/DB in production) |
-| Local disk vs S3 | Simpler deploy; doesn't scale to multiple workers without shared storage |
-| Re-encode clips | Slower but consistent output; stream-copy concat attempted first |
-| Random clip starts | Non-deterministic output; good for “highlight reel” feel; could add seed param later |
-| No auth | Per brief; would add API keys or JWT in production |
-
----
-
-## What I'd improve with more time
-
-1. **Redis + Celery/RQ workers** — durable jobs, horizontal scaling, retries
-2. **S3-compatible object storage** — shared storage across instances
-3. **Webhooks** instead of polling when job completes
-4. **Configurable** target duration, clip length, transitions (crossfade)
-5. **Progress granularity** — per-clip ETA based on historical timings
-6. **Integration tests** with real short FFmpeg-generated fixtures in CI
-7. **Rate limiting** and upload virus scanning for production
+| CLIP zero-shot vs BLIP-2 captions | CLIP is fast and good enough for prompt matching; BLIP would be slower but more semantic |
+| Per-job quality vs global encode | Per-job lets UI pick quality without server restart |
+| Incremental xfade merge | Simpler than one giant filter graph; extra re-encodes per boundary |
+| SQLite vs Postgres | SQLite is fine for single-worker assessment; Postgres for multi-instance |
+| MusicGen optional | Better prompt-driven audio when enabled; FFmpeg ambient fallback is instant |
+| No auth | Per brief; API keys in production |
 
 ---
 
 ## How to test end-to-end
 
-1. Start: `docker compose up --build`
+1. `docker compose up --build`
 2. Open http://localhost:8000
-3. Select 2–5 short mp4 files
-4. Click Upload & Generate
-5. Wait for status `completed` and download link
-6. Or use curl commands in README.md
+3. Set duration to **15s** (default), pick quality, add a prompt
+4. Upload 2–5 short mp4 files
+5. Click **Upload & Regenerate**
+6. Wait for `completed` and download
+
+Or use the curl examples in [README.md](./README.md).

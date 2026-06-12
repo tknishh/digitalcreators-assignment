@@ -7,8 +7,6 @@ services:
     envVars:
       - key: DEBUG
         value: "false"
-      - key: LOW_MEMORY_MODE
-        value: "true"
     disk:
       name: video-data
       mountPath: /app/data

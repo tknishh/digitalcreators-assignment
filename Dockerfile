@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-RUN mkdir -p data/uploads data/outputs data/temp
+RUN mkdir -p data/temp data/storage data/hf_cache
 
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000

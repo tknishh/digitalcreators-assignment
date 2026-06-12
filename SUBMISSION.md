@@ -12,14 +12,20 @@
 
 **How to test:**
 1. Open the URL in a browser
-2. Upload 2+ short video files (mp4/mov/webm)
-3. Wait for processing to complete (status polls automatically)
-4. Click **Download stitched video**
+2. Set duration (default 15s), quality, orientation; optionally add a prompt
+3. Upload 2+ short video files (mp4/mov/webm)
+4. Wait for processing to complete (status polls automatically)
+5. Click **Download final video**
 
 **API alternative (curl):**
 ```bash
 # Create job
-curl -X POST https://YOUR_URL/api/jobs -F "files=@a.mp4" -F "files=@b.mp4"
+curl -X POST https://YOUR_URL/api/jobs \
+  -F "duration_sec=15" \
+  -F "quality_profile=fast" \
+  -F "prompt=energetic product reel" \
+  -F "files=@a.mp4" \
+  -F "files=@b.mp4"
 
 # Poll status
 curl https://YOUR_URL/api/jobs/{job_id}

@@ -4,52 +4,55 @@
 
 | Tool | Why |
 |------|-----|
-| **Python 3.12** | Strong ecosystem for media tooling, fast to ship, readable for reviewers |
-| **FastAPI** | Async-native, automatic OpenAPI docs, excellent multipart upload support, `BackgroundTasks` for simple job dispatch without extra infra |
-| **Pydantic / pydantic-settings** | Typed request/response models and environment-based configuration |
-| **Uvicorn** | ASGI server; production-ready with the Docker image |
+| **Python 3.12** | Strong ecosystem for media tooling and ML inference |
+| **FastAPI** | Async-native, automatic OpenAPI docs, multipart upload support |
+| **Pydantic / pydantic-settings** | Typed API models and environment configuration |
+| **SQLAlchemy** | SQLite job persistence with checkpoint resume |
+| **Uvicorn** | ASGI server for local dev and Docker |
 
-## Video processing
-
-| Tool | Why |
-|------|-----|
-| **FFmpeg** | Industry standard for probe, trim, transcode, and concat. Handles mixed codecs/resolutions with a fallback re-encode path |
-| **ffprobe** | Reliable duration/metadata probing before clip selection |
-
-## Storage & I/O
+## AI & media
 
 | Tool | Why |
 |------|-----|
-| **Local filesystem** (`data/uploads`, `data/temp`, `data/outputs`) | Simplest correct choice for an assessment MVP; no S3 credentials or extra cost. Persistent disk on Render keeps files across restarts |
-| **aiofiles** | Non-blocking file writes during multipart upload streaming |
+| **Hugging Face Transformers** | CLIP zero-shot image classification for prompt-driven clip scoring |
+| **MusicGen** (optional) | Prompt-conditioned background audio when `ENABLE_MUSICGEN=true` |
+| **FFmpeg / ffprobe** | Extract, normalize, crossfade stitch, mux, duration probe |
+| **xfade / acrossfade** | Rotating crossfade transitions between clips |
+
+## Storage
+
+| Tool | Why |
+|------|-----|
+| **Firebase Storage** | Durable object storage for inputs, clips, and outputs |
+| **Local mirror** (`data/storage/`) | Fallback when Firebase credentials are absent |
+| **SQLite** (`data/jobs.db`) | Job metadata, checkpoints, clip selection JSON |
+| **aiofiles** | Non-blocking upload streaming |
 
 ## Infrastructure
 
 | Tool | Why |
 |------|-----|
-| **Docker** | Reproducible environment with FFmpeg pre-installed; same image locally and in production |
-| **docker-compose** | One-command local run for reviewers |
-| **Render** (target) | Free tier, Docker deploy, persistent disk, health checks — low friction for a timed assessment |
+| **Docker / docker-compose** | Reproducible environment with FFmpeg; one-command reviewer setup |
+| **Render** (target) | Docker deploy with persistent disk |
 
 ## Testing
 
 | Tool | Why |
 |------|-----|
-| **pytest** | Standard Python test runner |
-| **pytest-asyncio** | Async job store tests |
-| **httpx / FastAPI TestClient** | API integration tests without a running server |
+| **pytest** | API and clip-selection unit tests |
+| **FastAPI TestClient** | Integration tests without a live server |
 
-## Frontend (minimal)
+## Frontend
 
 | Tool | Why |
 |------|-----|
-| **Jinja2 template + vanilla JS** | Bare-minimum UI to upload files and poll status — satisfies “test the feature” without spending time on UI |
+| **Jinja2 + vanilla JS** | Upload UI with duration slider, quality picker, orientation, prompt, and status polling |
 
 ## Deliberately not used (and why)
 
 | Skipped | Reason |
 |---------|--------|
-| Celery / Redis | BackgroundTasks + async FFmpeg in thread pool is sufficient for the assessment scope; queue adds deploy complexity |
-| S3 / cloud storage | Local disk + persistent volume is simpler; would add with multi-instance scaling |
-| PostgreSQL | In-memory job store is fine for single-instance MVP; job metadata is ephemeral |
+| Celery / Redis | Single asyncio worker + SQLite checkpoints sufficient for assessment scope |
+| BLIP-2 captions | CLIP is faster; BLIP would improve semantic matching at higher latency |
+| PostgreSQL | SQLite adequate for single-worker deployment |
 | Auth | Out of scope per brief |

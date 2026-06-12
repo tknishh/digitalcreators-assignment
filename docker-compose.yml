@@ -5,6 +5,9 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+      - ./app/digital-creators-9a4e0-firebase-adminsdk-fbsvc-94e064d52f.json:/app/digital-creators-9a4e0-firebase-adminsdk-fbsvc-94e064d52f.json:ro
     environment:
-      - DEBUG=true
+      - HF_HOME=/app/data/hf_cache
+    env_file:
+      - .env
     restart: unless-stopped
