@@ -5,7 +5,7 @@ __pycache__/
 venv/
 .env
 data/
-firebase-service-account.json
+digital-creators-9a4e0-firebase-adminsdk-fbsvc-94e064d52f.json
 *.db
 .pytest_cache/
 .coverage

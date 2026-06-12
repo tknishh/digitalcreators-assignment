@@ -1,0 +1,5 @@
+# Optional overlay when using Firebase Storage (requires firebase-service-account.json in project root)
+services:
+  api:
+    volumes:
+      - ./firebase-service-account.json:/app/firebase-service-account.json:ro
