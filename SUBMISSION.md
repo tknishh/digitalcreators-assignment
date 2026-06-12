@@ -40,7 +40,7 @@ curl -OJ https://YOUR_URL/api/jobs/{job_id}/download
 
 See [TOOLS.md](./TOOLS.md).
 
-**Summary:** Python, FastAPI, FFmpeg, Docker, Render (deployment), pytest.
+**Summary:** Python, FastAPI, FFmpeg, Docker, Oracle Cloud (deployment), Firebase Storage, pytest.
 
 ---
 

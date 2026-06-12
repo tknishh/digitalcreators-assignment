@@ -33,7 +33,7 @@
 | Tool | Why |
 |------|-----|
 | **Docker / docker-compose** | Reproducible environment with FFmpeg; one-command reviewer setup |
-| **Render** (target) | Docker deploy with persistent disk |
+| **Oracle Cloud Always Free** | Docker on ARM VM (4 OCPU, 24 GB RAM), $0 |
 
 ## Testing
 

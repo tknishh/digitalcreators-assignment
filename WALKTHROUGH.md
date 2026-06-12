@@ -43,7 +43,7 @@ Client (HTML UI / curl)
 
 **Why async worker + checkpoints?** Video + CLIP processing can take minutes. Upload returns immediately (`202 Accepted`). SQLite checkpoints let jobs resume after container restarts without re-analyzing from scratch.
 
-**Why 1 job at a time?** Keeps memory predictable on constrained deploy targets (Render free tier, Docker locally with CLIP + optional MusicGen loaded).
+**Why 1 job at a time?** Keeps memory predictable on constrained hosts; Oracle Always Free (24 GB) handles this comfortably.
 
 ---
 

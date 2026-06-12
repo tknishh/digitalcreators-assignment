@@ -8,9 +8,15 @@ Upload source videos → Hugging Face CLIP scores clips against your prompt → 
 
 ## Quick start (Docker — recommended)
 
-Everything runs in one container: Python, FFmpeg, CLIP, and the API. No local Python or FFmpeg install required.
+Everything runs in one container. **Free on your machine.**
 
-### 1. Install Docker
+```bash
+cp -n .env.example .env && docker compose up --build
+```
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for **Oracle Cloud Always Free** deployment (public URL at $0).
+
+### Install Docker
 
 Install **Docker Desktop** (includes Docker Compose):
 
@@ -213,7 +219,7 @@ docker compose run --rm api pytest -v
 
 - [WALKTHROUGH.md](./WALKTHROUGH.md) — architecture, clip selection, transitions, trade-offs
 - [TOOLS.md](./TOOLS.md) — technology choices
-- [DEPLOYMENT.md](./DEPLOYMENT.md) — cloud deploy notes (Render, etc.)
+- [DEPLOYMENT.md](./DEPLOYMENT.md) — Oracle Cloud Always Free deploy guide
 
 ---
 

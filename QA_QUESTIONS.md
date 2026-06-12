@@ -42,7 +42,7 @@ Prepared questions for the call with Ankit. Grouped by theme.
 
 12. **Background processing** — I used FastAPI BackgroundTasks + thread-pool FFmpeg (no Redis/Celery). At what scale would you expect a proper job queue, and is my approach sufficient to demonstrate async API thinking?
 
-13. **Hosting choice** — I'm targeting Render with Docker + persistent disk. Any preference among Render, Railway, Fly.io for this type of workload?
+13. **Hosting choice** — Deployed on Oracle Cloud Always Free (ARM, 24 GB RAM) with Docker + Firebase Storage.
 
 14. **Storage lifecycle** — I auto-delete jobs after 24 hours. What retention window would you use in a real product?
 
